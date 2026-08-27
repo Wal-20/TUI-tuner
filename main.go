@@ -1,7 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"github.com/Wal-20/tui-tuner.git/note"
+)
 
 func main() {
-	fmt.Println("Hello, World!")
+	note.ListenInput()
 }
