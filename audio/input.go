@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 
+	"github.com/Wal-20/tui-tuner.git/note"
 	"github.com/gen2brain/malgo"
 )
 
@@ -28,27 +30,32 @@ func RecordAudio() {
 
 	// minSamples := int(deviceConfig.SampleRate / uint32(note.Notes[0].Freq))
 	minSamples := 4096
-	var audioBuffer []int16
+	audioBuffer := make([]int16, 0, minSamples)
 
 	onSamples := func(pOutputSample, pInputSamples []byte, framecount uint32) {
 		// pInputSamples contains microphone PCM data.
 		fmt.Printf("Received %d frames\n", framecount)
-		samples := make([]int16, framecount)
 
 		for i := range framecount {
 			offset := i * 2
 
-			samples[i] = int16(binary.LittleEndian.Uint16(
-				// takes two pcm bytes from the byte array and converts to one 16 bit int, so samples[i] is one pcm sample
+			sample := int16(binary.LittleEndian.Uint16(
+				// takes two pcm bytes from the byte array and converts to one 16 bit int, so sample is one pcm sample
 				// LittleEndian doesn't provide Int16, so we use Uint16 and then cast to int16
 				pInputSamples[offset : offset+2],
 			))
-			audioBuffer = append(audioBuffer, samples[i])
+			audioBuffer = append(audioBuffer, sample)
 
-			if len(audioBuffer) >= minSamples {
-				fmt.Println("Ready to detect frequency!")
-				// pitch := detectFrequency(audioBuffer[:minSamples])
-				audioBuffer = audioBuffer[minSamples:]
+			if len(audioBuffer) == minSamples {
+				delays := [5]int{1, 2, 3, 4, 5}
+
+				freq := detectFrequency(audioBuffer, delays[:], 44100)
+				fmt.Printf("Detected frequency: %v\n", freq)
+
+				note, octave, cents := note.DetectNote(freq)
+				fmt.Printf("Note: %v | Octave: %v | Cents: %v\n", note, octave, cents)
+
+				audioBuffer = audioBuffer[:0]
 			}
 		}
 	}
@@ -70,8 +77,30 @@ func RecordAudio() {
 	fmt.Scanln()
 }
 
-func detectFrequency(audioBuffer []int16, interval int, delay int) {
-	// buffer contains the minimum needed pcm samples to estimate frequency
-	// YIN: compare pairs of samples, squared difference between each sample of the pair, sum the differences
+func detectFrequency(audioBuffer []int16, delays []int, sampleRate uint32) float64 {
+	minDiff := math.MaxFloat64
+	bestTau := 0
 
+	for _, tau := range delays {
+		sqDiff := 0.0
+
+		for i := 0; i < len(audioBuffer)-tau; i++ {
+			first := float64(audioBuffer[i])
+			second := float64(audioBuffer[i+tau])
+
+			diff := first - second
+			sqDiff += diff * diff
+		}
+
+		if sqDiff < minDiff {
+			minDiff = sqDiff
+			bestTau = tau
+		}
+	}
+
+	if bestTau == 0 {
+		return 0
+	}
+
+	return float64(sampleRate) / float64(bestTau)
 }

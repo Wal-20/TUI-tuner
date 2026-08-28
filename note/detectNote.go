@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func detectNote(freq float64) (string, int, float64) {
+func DetectNote(freq float64) (string, int, float64) {
 	if freq <= 0 {
 		return "", 0, 0
 	}
@@ -31,7 +31,7 @@ func ListenInput() {
 	var freq float64
 	fmt.Print("Enter a frequency: ")
 	fmt.Scan(&freq)
-	note, octave, cents := detectNote(freq)
+	note, octave, cents := DetectNote(freq)
 	fmt.Printf("Note: %v | Octave: %v | Cents: %v\n", note, octave, cents)
 }
 
@@ -46,7 +46,7 @@ func Benchmark(seconds float64, sleepDuration float64) {
 			if time.Since(start).Seconds() >= seconds {
 				break
 			}
-			detectNote(val.Freq)
+			DetectNote(val.Freq)
 			calculations++
 			time.Sleep(time.Duration(sleepDuration * float64(time.Second)))
 		}
