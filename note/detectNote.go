@@ -3,9 +3,13 @@ package note
 import (
 	"fmt"
 	"math"
+	"time"
 )
 
 func detectNote(freq float64) (string, int, float64) {
+	if freq <= 0 {
+		return "", 0, 0
+	}
 
 	var noteNames = []string{
 		"C", "C#", "D", "D#", "E", "F",
@@ -28,5 +32,24 @@ func ListenInput() {
 	fmt.Print("Enter a frequency: ")
 	fmt.Scan(&freq)
 	note, octave, cents := detectNote(freq)
-	fmt.Printf("\nNote: %v | Octave: %v | Cents: %v\n", note, octave, cents)
+	fmt.Printf("Note: %v | Octave: %v | Cents: %v\n", note, octave, cents)
+}
+
+func Benchmark(seconds float64, sleepDuration float64) {
+	calculations := 0
+
+	fmt.Println("Started benchmark...")
+
+	start := time.Now()
+	for time.Since(start).Seconds() < seconds {
+		for _, val := range Notes {
+			if time.Since(start).Seconds() >= seconds {
+				break
+			}
+			detectNote(val.Freq)
+			calculations++
+			time.Sleep(time.Duration(sleepDuration * float64(time.Second)))
+		}
+	}
+	fmt.Printf("%v Frequency to note calculations per second\n", calculations/int(seconds))
 }
