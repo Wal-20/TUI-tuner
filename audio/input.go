@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"math"
 
 	"github.com/Wal-20/tui-tuner.git/note"
 	"github.com/gen2brain/malgo"
@@ -34,8 +33,8 @@ func RecordAudio() {
 
 	onSamples := func(pOutputSample, pInputSamples []byte, framecount uint32) {
 		// pInputSamples contains microphone PCM data.
-		fmt.Printf("Received %d frames\n", framecount)
 
+		lastFreq := 0.0
 		for i := range framecount {
 			offset := i * 2
 
@@ -47,13 +46,20 @@ func RecordAudio() {
 			audioBuffer = append(audioBuffer, sample)
 
 			if len(audioBuffer) == minSamples {
-				delays := [5]int{1, 2, 3, 4, 5}
+				delays := make([]int, 0, 1000)
 
-				freq := detectFrequency(audioBuffer, delays[:], 44100)
-				fmt.Printf("Detected frequency: %v\n", freq)
+				for tau := 0; tau <= 1000; tau++ {
+					delays = append(delays, tau)
+				}
+
+				freq := detectFrequency(audioBuffer, delays, 44100)
+				if freq-lastFreq > 100 {
+					fmt.Println()
+				}
+				lastFreq = freq
 
 				note, octave, cents := note.DetectNote(freq)
-				fmt.Printf("Note: %v | Octave: %v | Cents: %v\n", note, octave, cents)
+				fmt.Printf("\r\nDetected frequency: %.2f | Note: %v | Octave: %v | Cents: %.2f                    ", freq, note, octave, cents)
 
 				audioBuffer = audioBuffer[:0]
 			}
@@ -78,9 +84,9 @@ func RecordAudio() {
 }
 
 func detectFrequency(audioBuffer []int16, delays []int, sampleRate uint32) float64 {
-	minDiff := math.MaxFloat64
-	bestTau := 0
+	differences := make(map[int]float64)
 
+	// Step 1: Difference function
 	for _, tau := range delays {
 		sqDiff := 0.0
 
@@ -92,9 +98,25 @@ func detectFrequency(audioBuffer []int16, delays []int, sampleRate uint32) float
 			sqDiff += diff * diff
 		}
 
-		if sqDiff < minDiff {
-			minDiff = sqDiff
+		differences[tau] = sqDiff
+	}
+
+	// Step 2: Cumulative mean normalized difference
+	runningSum := 0.0
+	threshold := 0.1
+
+	bestTau := 0
+
+	for _, tau := range delays {
+		runningSum += differences[tau]
+
+		normalized := differences[tau] /
+			(runningSum / float64(tau))
+
+		// Find the first sufficiently strong dip
+		if normalized < threshold {
 			bestTau = tau
+			break
 		}
 	}
 
