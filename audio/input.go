@@ -4,9 +4,16 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 
 	"github.com/Wal-20/tui-tuner.git/note"
 	"github.com/gen2brain/malgo"
+)
+
+const (
+	minFreq         = 70.0
+	maxFreq         = 400.0
+	maxAperiodicity = 0.5
 )
 
 func RecordAudio() {
@@ -46,13 +53,10 @@ func RecordAudio() {
 			audioBuffer = append(audioBuffer, sample)
 
 			if len(audioBuffer) == minSamples {
-				delays := make([]int, 0, 1000)
+				// without this YIN locks onto hum, rumble, or a ringing lower string
+				filtered := highPassFilter(audioBuffer, 100, 44100, 3)
 
-				for tau := 0; tau <= 1000; tau++ {
-					delays = append(delays, tau)
-				}
-
-				freq := detectFrequency(audioBuffer, delays, 44100)
+				freq := detectFrequency(filtered, 44100)
 				if freq-lastFreq > 100 {
 					fmt.Println()
 				}
@@ -61,6 +65,7 @@ func RecordAudio() {
 				note, octave, cents := note.DetectNote(freq)
 				fmt.Printf("\r\nDetected frequency: %.2f | Note: %v | Octave: %v | Cents: %.2f                    ", freq, note, octave, cents)
 
+				// clear buffer
 				audioBuffer = audioBuffer[:0]
 			}
 		}
@@ -83,18 +88,44 @@ func RecordAudio() {
 	fmt.Scanln()
 }
 
-func detectFrequency(audioBuffer []int16, delays []int, sampleRate uint32) float64 {
-	differences := make(map[int]float64)
+// highPassFilter runs `poles` passes of a one-pole high-pass over the PCM buffer.
+// Each pass compounds the attenuation below the cutoff.
+func highPassFilter(samples []int16, cutoff, sampleRate float64, poles int) []float64 {
+	filtered := make([]float64, len(samples))
+	for i, s := range samples {
+		filtered[i] = float64(s)
+	}
+
+	rc := 1.0 / (2 * math.Pi * cutoff)
+	alpha := rc / (rc + 1.0/sampleRate)
+
+	for range poles {
+		prevIn, prevOut := 0.0, 0.0
+		for i, in := range filtered {
+			out := alpha * (prevOut + in - prevIn)
+			filtered[i] = out
+			prevIn, prevOut = in, out
+		}
+	}
+
+	return filtered
+}
+
+func detectFrequency(audioBuffer []float64, sampleRate uint32) float64 {
+	tauMin := int(float64(sampleRate) / maxFreq)
+	tauMax := int(float64(sampleRate) / minFreq)
+	if tauMax >= len(audioBuffer) {
+		tauMax = len(audioBuffer) - 1
+	}
 
 	// Step 1: Difference function
-	for _, tau := range delays {
+	differences := make([]float64, tauMax+1)
+
+	for tau := 1; tau <= tauMax; tau++ {
 		sqDiff := 0.0
 
 		for i := 0; i < len(audioBuffer)-tau; i++ {
-			first := float64(audioBuffer[i])
-			second := float64(audioBuffer[i+tau])
-
-			diff := first - second
+			diff := audioBuffer[i] - audioBuffer[i+tau]
 			sqDiff += diff * diff
 		}
 
@@ -102,27 +133,62 @@ func detectFrequency(audioBuffer []int16, delays []int, sampleRate uint32) float
 	}
 
 	// Step 2: Cumulative mean normalized difference
+	cmndf := make([]float64, tauMax+1)
+	cmndf[0] = 1.0
 	runningSum := 0.0
-	threshold := 0.1
+	threshold := 0.15
+	bestTau := -1
 
-	bestTau := 0
+	// deepest dip so far, used when nothing crosses the threshold
+	deepest, deepestTau := maxAperiodicity, -1
 
-	for _, tau := range delays {
+	for tau := 1; tau <= tauMax; tau++ {
+		// The running sum accumulates from tau 1 even below tauMin, or the
+		// normalization is wrong for every tau above it.
 		runningSum += differences[tau]
+		cmndf[tau] = differences[tau] / (runningSum / float64(tau))
 
-		normalized := differences[tau] /
-			(runningSum / float64(tau))
+		if tau < tauMin {
+			continue
+		}
 
-		// Find the first sufficiently strong dip
-		if normalized < threshold {
+		if cmndf[tau] < deepest {
+			deepest, deepestTau = cmndf[tau], tau
+		}
+
+		if cmndf[tau] < threshold {
+			// crossed the threshold — walk down to the bottom of this dip
+			for tau+1 <= tauMax {
+				runningSum += differences[tau+1]
+				cmndf[tau+1] = differences[tau+1] / (runningSum / float64(tau+1))
+				if cmndf[tau+1] >= cmndf[tau] {
+					break // it turned back up; tau is the minimum
+				}
+				tau++
+			}
 			bestTau = tau
 			break
 		}
 	}
 
-	if bestTau == 0 {
-		return 0
+	if bestTau < 1 {
+		if deepestTau < 1 {
+			return 0 // not periodic enough for a note
+		}
+		bestTau = deepestTau
 	}
 
-	return float64(sampleRate) / float64(bestTau)
+	// Parabolic interpolation
+	refinedTau := float64(bestTau)
+
+	if bestTau+1 <= tauMax {
+		y1, y2, y3 := cmndf[bestTau-1], cmndf[bestTau], cmndf[bestTau+1]
+		if denom := y1 - 2*y2 + y3; denom > 0 {
+			if shift := (y1 - y3) / (2 * denom); shift > -1 && shift < 1 {
+				refinedTau += shift
+			}
+		}
+	}
+
+	return float64(sampleRate) / refinedTau
 }
