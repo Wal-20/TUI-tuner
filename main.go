@@ -1,12 +1,15 @@
 package main
 
 import (
-	"github.com/Wal-20/tui-tuner.git/audio"
-	// "github.com/Wal-20/tui-tuner.git/note"
+	"fmt"
+	"os"
+
+	"github.com/Wal-20/tui-tuner.git/tui"
 )
 
 func main() {
-	// 0.02 -> 49 calls to detectNote, reasonable start
-	// note.Benchmark(1, 0.02)
-	audio.RecordAudio()
+	if err := tui.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "tuner:", err)
+		os.Exit(1)
+	}
 }
