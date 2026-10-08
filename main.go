@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	if err := tui.Run(); err != nil {
+	if _, err := tui.RunSelectModel(); err != nil {
 		fmt.Fprintln(os.Stderr, "tuner:", err)
 		os.Exit(1)
 	}

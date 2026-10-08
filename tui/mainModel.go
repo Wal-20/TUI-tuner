@@ -1,5 +1,5 @@
-package tui
 
+package tui
 import (
 	"fmt"
 	"math"
@@ -50,31 +50,23 @@ func tone(cents float64) (lipgloss.Style, lipgloss.Style) {
 	return text, box
 }
 
-// openStrings is standard tuning, low to high.
-var openStrings = []struct {
-	Name   string
-	Octave int
-	Label  string
-}{
-	{"E", 2, "E"}, {"A", 2, "A"}, {"D", 3, "D"},
-	{"G", 3, "G"}, {"B", 3, "B"}, {"E", 4, "e"},
-}
-
 type readingMsg audio.Reading
 
-type model struct {
-	readings <-chan audio.Reading
-	current  audio.Reading
-	silent   int
-	width    int
-	height   int
+type mainModel struct {
+	readings       <-chan audio.Reading
+	current        audio.Reading
+	silent         int
+	width          int
+	selectedTuning tuningItem
+	height         int
+	stopAudio      func()
 }
 
-func (m model) Init() tea.Cmd {
-	return waitFor(m.readings)
+func (m mainModel) Init() tea.Cmd {
+	return nil
 }
 
-// waitFor blocks in its own goroutine until the detector produces a Reading.
+// / waitFor blocks in its own goroutine until the detector produces a Reading.
 func waitFor(readings <-chan audio.Reading) tea.Cmd {
 	return func() tea.Msg {
 		r, ok := <-readings
@@ -85,15 +77,23 @@ func waitFor(readings <-chan audio.Reading) tea.Cmd {
 	}
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "esc", "ctrl+c":
+		case "q", "ctrl+c":
+			if m.stopAudio != nil {
+				m.stopAudio()
+			}
 			return m, tea.Quit
+		case "esc":
+			selectModel, err := RunSelectModel()
+			if err == nil {
+				return selectModel, nil
+			}
 		}
 
 	case readingMsg:
@@ -110,7 +110,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // dims returns the terminal size, falling back to a sane default before the
 // first WindowSizeMsg arrives.
-func (m model) dims() (int, int) {
+func (m mainModel) dims() (int, int) {
 	w, h := m.width, m.height
 	if w == 0 {
 		w, h = 80, 24
@@ -118,7 +118,7 @@ func (m model) dims() (int, int) {
 	return w, h
 }
 
-func (m model) View() string {
+func (m mainModel) View() string {
 	w, h := m.dims()
 
 	// A short terminal can't fit the spaced-out layout, so drop the breathing
@@ -146,7 +146,7 @@ func innerWidth(w int) int {
 
 // body renders the same number of lines in every state, so the panel doesn't
 // shift under vertical centring as notes come and go.
-func (m model) body(inner int, tight bool) string {
+func (m mainModel) body(inner int, tight bool) string {
 	center := lipgloss.NewStyle().Width(inner).Align(lipgloss.Center)
 	blank := center.Render("")
 
@@ -183,7 +183,7 @@ func (m model) body(inner int, tight bool) string {
 			[]string{center.Render(faint.Render("listening…"))},
 			[]string{blank},
 			[]string{blank},
-			[]string{center.Render(stringRow(audio.Reading{}, faint, inner))},
+			[]string{center.Render(stringRow(audio.Reading{}, faint, inner, m.selectedTuning))},
 		)
 	}
 
@@ -206,13 +206,13 @@ func (m model) body(inner int, tight bool) string {
 		boxed(text.Render(name), box),
 		[]string{center.Render(text.Render(fmt.Sprintf("%+.1f cents", r.Cents)))},
 		[]string{center.Render(faint.Render("♭ ") + text.Render(meter(r.Cents, inner-8)) + faint.Render(" ♯"))},
+		[]string{center.Render(stringRow(r, text, inner, m.selectedTuning))},
 		[]string{center.Render(info)},
-		[]string{center.Render(stringRow(r, text, inner))},
 	)
 }
 
 // stringRow shows standard tuning with the string being played picked out.
-func stringRow(r audio.Reading, text lipgloss.Style, inner int) string {
+func stringRow(r audio.Reading, text lipgloss.Style, inner int, tuning tuningItem) string {
 	gap := "   "
 	if inner < 24 {
 		gap = " "
@@ -220,7 +220,7 @@ func stringRow(r audio.Reading, text lipgloss.Style, inner int) string {
 
 	var b strings.Builder
 
-	for i, s := range openStrings {
+	for i, s := range tuning.tuning.Notes {
 		if i > 0 {
 			b.WriteString(faint.Render(gap))
 		}
@@ -257,16 +257,4 @@ func meter(cents float64, width int) string {
 	}
 
 	return b.String()
-}
-
-// Run starts capture and blocks until the user quits.
-func Run() error {
-	readings, stop, err := audio.Listen()
-	if err != nil {
-		return err
-	}
-	defer stop()
-
-	_, err = tea.NewProgram(model{readings: readings}, tea.WithAltScreen()).Run()
-	return err
 }
